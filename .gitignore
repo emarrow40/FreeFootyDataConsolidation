@@ -1,0 +1,11 @@
+# env file
+.env
+
+# pycache
+__pycache__
+
+# venv folder
+footydata-env
+
+# test csv exports
+test_CSVs
