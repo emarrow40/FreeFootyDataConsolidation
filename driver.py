@@ -5,7 +5,7 @@ from siteScrapers import extract_main
 from dfTransforms import transform_main
 from db import load_main
 
-async def main():
+async def main() -> None:
     """Runs pipeline webscraping extraction, site categorical linkage transforms, and loads into an instance of PostgreSQL"""
     async with async_playwright() as p:
         async with ClientSession() as session:
