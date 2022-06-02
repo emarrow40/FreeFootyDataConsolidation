@@ -4,7 +4,7 @@ from itertools import chain
 import asyncio
 from aiohttp import ClientSession
 from playwright.async_api import Browser, Page
-from sites import Fbref, FotMob, Soccerment, Under, Who, Sofa, Tm
+from sites import Fbref, FotMob, Soccerment, Under, Who, Sofa, Tm, Cap
 from siteHeaders import HttpHeaders
 from idObjects import ClubData, PlayerData
 from typing import Union
@@ -15,8 +15,9 @@ class PlaywrightOnly:
     Applicable to:
     understat
     fbref
+    capology
     """
-    def __init__(self, site: Union[Under, Fbref], browser: Browser) -> None:
+    def __init__(self, site: Union[Under, Fbref, Cap], browser: Browser) -> None:
         self.site = site
         self.browser = browser
         self.context = None
@@ -186,6 +187,7 @@ async def extract_main(browser: Browser, session: ClientSession) -> tuple[pd.Dat
         AiohttpOnlyHtml(Soccerment(), session).main(),
         PlaywrightOnly(Under(), browser).main(),
         PlaywrightOnly(Fbref(), browser).main(),
+        PlaywrightOnly(Cap(), browser).main(),
         PlaywrightAiohttp(Who(), session, browser).main(),
         PlaywrightAiohttp(FotMob(), session, browser).main(),
     ]

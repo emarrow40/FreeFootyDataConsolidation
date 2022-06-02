@@ -12,7 +12,7 @@ class PlayerMatchesBySite:
         self.players_by_site = players_by_site
         self.team_name = team_name
         self.session = session
-        self.site_names = ['transfermrkt', 'sofascore', 'fbref', 'understat', 'whoscored', 'soccerment']
+        self.site_names = ['transfermrkt', 'sofascore', 'fbref', 'understat', 'whoscored', 'soccerment', 'capology']
         self.fm_names = self.players_by_site[-1] # fotmob designated as primary name in matching functions
         self.sites_to_match = {site_name: players for site_name, players in zip(self.site_names, self.players_by_site[:-1])}
         self.match_rows = [self.match_row_template(fm_name) for fm_name in self.fm_names]

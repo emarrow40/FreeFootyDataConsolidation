@@ -128,7 +128,7 @@ class Soccerment:
         return [PlayerData(p.text, self.player_id(p), team_name, self.player_url(p), self.name) for p in players]
 
 """
-Fbref and understat require full browser automation, content loaded dynamically and requests don't appear in dev tools
+Fbref, understat, and capology require full browser automation, content loaded dynamically and requests don't appear in dev tools
 """
 
 class Fbref:
@@ -216,6 +216,48 @@ class Under:
         trs = soup.find_all('tr')
         players = map(lambda x: x.find_all('td')[1].a, trs)
         return [PlayerData(p.text, self.player_id(p), team_name, self.player_url(p), self.name) for p in players]
+
+class Cap:
+    name = 'capology'
+    club_table = '#panel > div.content-block > div > div.col.s12.team-row-container'
+    player_table = '#table'
+    club_id_pat = re.compile(r'club/(.+)/salaries')
+    player_id_pat = re.compile(r'player/.+-.+-(\d+)/profile')
+    leagues = {
+        'Premier League': ('uk', 'premier-league'),
+        'LaLiga': ('es', 'la-liga'),
+        'Ligue 1': ('fr', 'ligue-1'),
+        'Serie A': ('it', 'serie-a'),
+        'Bundesliga': ('de', '1-bundesliga'),
+    }
+
+    def get_league_url(self, league):
+        return f'https://www.capology.com/{league[0]}/{league[1]}/salaries/'
+
+    def club_id(self, club):
+        return self.club_id_pat.search(club.get('href')).group(1)
+
+    def club_url(self, club):
+        link = club.get('href')
+        return f'https://www.capology.com{link}'
+
+    def process_club_table(self, club_html):
+        soup = BeautifulSoup(club_html, 'lxml').find('div', attrs={'class': 'team-row'})
+        clubs = soup.find_all('a')
+        return [ClubData(c.text, self.club_id(c), 'League N/A', self.club_url(c), self.name) for c in clubs]
+
+    def player_id(self, player):
+        return self.player_id_pat.search(player.get('href')).group(1)
+
+    def player_url(self, player):
+        link = player.get('href')
+        return f'https://www.capology.com{link}'
+
+    def process_player_table(self, player_html, team_name):
+        soup = BeautifulSoup(player_html, 'lxml')
+        trs = soup.find_all('tr')
+        players = map(lambda x: x.find_all('td')[0].a, trs)
+        return [PlayerData(p.text, self.player_id(p), team_name, self.player_url(p), self.name) for p in players]  
 
 """
 Fotmob, whoscored require extracting cookie headers through browser automation before making http requests

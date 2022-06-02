@@ -23,6 +23,7 @@ class PgInitTables:
                 'understat', 
                 'whoscored', 
                 'soccerment',
+                'capology',
                 'fotmob',
         ]
         self.all_table_names = [site + '_teams' for site in self.sites] + [site + '_players' for site in self.sites] + ['players', 'teams']
