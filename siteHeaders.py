@@ -2,6 +2,7 @@ from dataclasses import dataclass
 
 @dataclass
 class HttpHeaders:
+    """Dataclass to store appropriate headers for a given site"""
     cookie: str
     origin: str
     referer: str

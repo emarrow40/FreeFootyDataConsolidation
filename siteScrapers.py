@@ -10,26 +10,32 @@ from idObjects import ClubData, PlayerData
 from typing import Union
 
 class PlaywrightOnly:
-    def __init__(self, site: Union[Under, Fbref], browser: Browser):
+    """Facilitates scraping of sites where content is dynamically loaded
+    
+    Applicable to:
+    understat
+    fbref
+    """
+    def __init__(self, site: Union[Under, Fbref], browser: Browser) -> None:
         self.site = site
         self.browser = browser
         self.context = None
 
-    async def get_club_table(self, league, page: Page):
+    async def get_club_table(self, league, page: Page) -> ClubData:
         league_url = self.site.get_league_url(league)
         await page.goto(league_url)
         await page.locator(self.site.club_table).wait_for()
         return self.site.process_club_table(await page.inner_html(self.site.club_table))
         
-    async def get_player_table(self, club, page: Page):
+    async def get_player_table(self, club: ClubData, page: Page) -> PlayerData:
         await page.goto(club.url)
         await page.locator(self.site.player_table).wait_for()
         return self.site.process_player_table(await page.inner_html(self.site.player_table), club.name)
 
-    def idObjects_to_df(self, idObjects: Union[list[ClubData], list[PlayerData]]):
+    def idObjects_to_df(self, idObjects: Union[list[ClubData], list[PlayerData]]) -> pd.DataFrame:
         return pd.DataFrame(map(lambda x: x.__dict__, idObjects)) 
 
-    async def main(self):
+    async def main(self) -> tuple[pd.DataFrame, pd.DataFrame]:
         self.context = await self.browser.new_context()
         page = await self.context.new_page()
         clubs = [await self.get_club_table(league, page) for league in self.site.leagues.values()]
@@ -42,12 +48,19 @@ class PlaywrightOnly:
         return club_df, player_df
 
 class AiohttpOnlyJson:
-    def __init__(self, site: Union[Sofa, Tm], session: ClientSession):
+    """Facilitates scraping of sites where content can be extracted through
+    only http requests that return JSON data
+
+    Applicable to:
+    sofascore
+    transfermrkt
+    """
+    def __init__(self, site: Union[Sofa, Tm], session: ClientSession) -> None:
         self.site = site
         self.session = session
         self.headers = HttpHeaders(None, self.site.origin, self.site.referer).header_dict()
 
-    async def get_club_json(self, league):
+    async def get_club_json(self, league) -> ClubData:
         league_url = self.site.get_league_url(league)
         print(league_url)
         async with self.session.get(league_url, headers=self.headers) as r:
@@ -55,7 +68,7 @@ class AiohttpOnlyJson:
             club_json = json.loads(await r.read())
             return self.site.process_club_json(club_json)
 
-    async def get_player_json(self, club):
+    async def get_player_json(self, club: ClubData) -> PlayerData:
         club_api_url = self.site.club_api_url(club)
         print(club_api_url)
         async with self.session.get(club_api_url, headers=self.headers) as r:
@@ -63,10 +76,10 @@ class AiohttpOnlyJson:
             player_json = json.loads(await r.read())
             return self.site.process_player_json(player_json, club.name)
 
-    def idObjects_to_df(self, idObjects: Union[list[ClubData], list[PlayerData]]):
+    def idObjects_to_df(self, idObjects: Union[list[ClubData], list[PlayerData]]) -> pd.DataFrame:
         return pd.DataFrame(map(lambda x: x.__dict__, idObjects))
 
-    async def main(self):
+    async def main(self) -> tuple[pd.DataFrame, pd.DataFrame]:
         clubs = [await self.get_club_json(league) for league in self.site.leagues.values()]
         all_clubs = list(chain(*clubs))
         club_df = self.idObjects_to_df(all_clubs)
@@ -76,28 +89,34 @@ class AiohttpOnlyJson:
         return club_df, player_df
 
 class AiohttpOnlyHtml:
-    def __init__(self, site: Soccerment, session: ClientSession):
+    """Facilitates scraping of sites where content can be extracted through
+    only http requests that return HTML
+
+    Applicable to:
+    soccerment
+    """
+    def __init__(self, site: Soccerment, session: ClientSession) -> None:
         self.site = site
         self.session = session
         self.headers = HttpHeaders(None, self.site.origin, self.site.referer).header_dict()
 
-    async def get_club_html(self, league):
+    async def get_club_html(self, league) -> ClubData:
         league_url = self.site.get_league_url(league)
         async with self.session.get(league_url, headers=self.headers) as r:
             r.raise_for_status()
             club_html = await r.text()
             return self.site.process_club_html(club_html)
 
-    async def get_player_html(self, club):
+    async def get_player_html(self, club: ClubData) -> PlayerData:
         async with self.session.get(club.url, headers=self.headers) as r:
             r.raise_for_status()
             player_html = await r.text()
             return self.site.process_player_html(player_html)
 
-    def idObjects_to_df(self, idObjects: Union[list[ClubData], list[PlayerData]]):
+    def idObjects_to_df(self, idObjects: Union[list[ClubData], list[PlayerData]]) -> pd.DataFrame:
         return pd.DataFrame(map(lambda x: x.__dict__, idObjects))
 
-    async def main(self):
+    async def main(self) -> tuple[pd.DataFrame, pd.DataFrame]:
         clubs = [await self.get_club_html(league) for league in self.site.leagues.values()]
         all_clubs = list(chain(*clubs))
         club_df = self.idObjects_to_df(all_clubs)
@@ -107,29 +126,36 @@ class AiohttpOnlyHtml:
         return club_df, player_df
 
 class PlaywrightAiohttp:
+    """Faciliates scraping of site where http requests can be used to extract
+    data after the site cookies are obtained through browser automation
+
+    Applicable to:
+    whoscored
+    fotmob
+    """
     def __init__(self, site: Union[Who, FotMob], session: ClientSession, browser: Browser):
         self.site = site
         self.session = session
         self.browser = browser
         self.context = None
 
-    async def get_cookies(self):
+    async def get_cookies(self) -> str:
         cookies = await self.context.cookies()
         r_cookies = filter(lambda x: self.site.cookie_keyword in x['name'] or x['name'] in self.site.cookie_filter, cookies)
         cookie_header = '; '.join([f"{cookie['name']}={cookie['value']}" for cookie in r_cookies]).strip()
         return cookie_header
 
-    async def get_headers(self, club: ClubData):
+    async def get_headers(self, club: ClubData) -> dict:
         cookie_header = await self.get_cookies()
         return HttpHeaders(cookie_header, None, club.url).header_dict()
 
-    async def get_club_table(self, league, page: Page):
+    async def get_club_table(self, league, page: Page) -> ClubData:
         league_url = self.site.get_league_url(league)
         await page.goto(league_url)
         await page.locator(self.site.club_table).wait_for()
         return self.site.process_club_table(await page.inner_html(self.site.club_table), league)
 
-    async def get_player_json(self, club: ClubData):
+    async def get_player_json(self, club: ClubData) -> PlayerData:
         club_api_url = self.site.club_api_url(club)
         headers = await self.get_headers(club)
         async with self.session.get(club_api_url, headers=headers) as r:
@@ -137,10 +163,10 @@ class PlaywrightAiohttp:
             player_json = json.loads(await r.read())
             return self.site.process_player_json(player_json, club)
 
-    def idObjects_to_df(self, idObjects: Union[list[ClubData], list[PlayerData]]):
+    def idObjects_to_df(self, idObjects: Union[list[ClubData], list[PlayerData]]) -> pd.DataFrame:
         return pd.DataFrame(map(lambda x: x.__dict__, idObjects))
 
-    async def main(self):
+    async def main(self) -> tuple[pd.DataFrame, pd.DataFrame]:
         self.context = await self.browser.new_context()
         page = await self.context.new_page()
         clubs = [await self.get_club_table(league, page) for league in self.site.leagues.values()]
@@ -152,7 +178,8 @@ class PlaywrightAiohttp:
         player_df = self.idObjects_to_df(all_players)
         return club_df, player_df
 
-async def extract_main(browser, session):
+async def extract_main(browser: Browser, session: ClientSession) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Extracts player and team data from each site and stores them in comprehensive dataframes"""
     site_tasks = [
         AiohttpOnlyJson(Sofa(), session).main(),
         AiohttpOnlyJson(Tm(), session).main(),

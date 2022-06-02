@@ -2,6 +2,7 @@ from dataclasses import dataclass
 
 @dataclass
 class ClubData:
+    """Dataclass to store club site scraping results"""
     name: str
     id: int
     league: str
@@ -10,6 +11,7 @@ class ClubData:
 
 @dataclass
 class PlayerData:
+    """Dataclass to store player site scraping results"""
     name: str
     id: int
     team: str

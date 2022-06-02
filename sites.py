@@ -35,7 +35,6 @@ class Sofa:
         return [ClubData(c['name'], c['id'], league, self.club_url(c), self.name) for c in clubs]
 
     def club_api_url(self, club: ClubData):
-        #league = self.leagues[club.league]
         return f'https://api.sofascore.com/api/v1/team/{club.id}/players'
 
     def player_url(self, player):
