@@ -136,7 +136,7 @@ class PlayerMatchesBySite:
                 await self.match_stage_async(match_function)
 
     async def main(self) -> pd.DataFrame:
-        """Designates sync and async match stages and runs them to produce a Match DataFrame"""
+        """Designates sync and async match stages and runs them to produce a match DataFrame"""
         sync_match_funcs = [
             self.same_name, 
             self.fuzzy_match, 

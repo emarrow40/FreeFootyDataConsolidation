@@ -1,11 +1,12 @@
 from bs4 import BeautifulSoup, SoupStrainer
 import re
 from idObjects import ClubData, PlayerData
+from siteHeaders import set_headers
 from itertools import chain
 import urllib.parse
 
 """
-Sofascore and TransferMarket data can be accessed directly through http requests
+Sofascore and Transfermrkt data can be accessed directly through http requests
 """
 
 class Sofa:
@@ -17,8 +18,10 @@ class Sofa:
         'Serie A': (23, 37475),
         'Bundesliga': (35, 37166),
     }
-    origin = 'https://www.sofascore.com'
-    referer = 'https://www.sofascore.com/'
+    headers = set_headers(
+        origin = 'https://www.sofascore.com',
+        referer = 'https://www.sofascore.com/',
+    )
     
     def get_league_url(self, league):
         return f'https://api.sofascore.com/api/v1/unique-tournament/{league[0]}/season/{league[1]}/standings/total'
@@ -56,8 +59,7 @@ class Tm:
         'Serie A': 'IT1',
         'Bundesliga': 'L1',      
     }
-    origin = None
-    referer = None
+    headers = set_headers()
 
     def get_league_url(self, league):
         return f'https://www.transfermarkt.us/quickselect/teams/{league}'
@@ -96,8 +98,7 @@ class Soccerment:
     player_strainer = SoupStrainer('div', attrs={'id': 'teams_tabs_content'})
     player_teamname = SoupStrainer('h1', {'class': 'team_name'})
     player_id_pat = re.compile(r'player/(\d+)/')
-    origin = None
-    referer = None
+    headers = set_headers()
 
     def get_league_url(self, league):
         return f'https://analytics.soccerment.com/en/league/{league}'
@@ -128,7 +129,7 @@ class Soccerment:
         return [PlayerData(p.text, self.player_id(p), team_name, self.player_url(p), self.name) for p in players]
 
 """
-Fbref, understat, and capology require full browser automation, content loaded dynamically and requests don't appear in dev tools
+Fbref and understat require full browser automation, content loaded dynamically and requests don't appear in dev tools
 """
 
 class Fbref:
@@ -217,12 +218,17 @@ class Under:
         players = map(lambda x: x.find_all('td')[1].a, trs)
         return [PlayerData(p.text, self.player_id(p), team_name, self.player_url(p), self.name) for p in players]
 
+"""
+Capology requires browser automation but has different data structure to that of other sites
+as you are able to extract all the player and team data for a given league from one page
+"""
+
 class Cap:
     name = 'capology'
-    club_table = '#panel > div.content-block > div > div.col.s12.team-row-container'
-    player_table = '#table'
-    club_id_pat = re.compile(r'club/(.+)/salaries')
-    player_id_pat = re.compile(r'player/.+-.+-(\d+)/profile')
+    club_table = '#panel > div.content-block > div > div.col.s12.team-row-container > div.col.s12.team-row'
+    player_table = '#table > tbody'
+    club_id_pat = re.compile(r'/club/(.+)/salaries/')
+    player_id_pat = re.compile(r'/player/(.+)/profile/')
     leagues = {
         'Premier League': ('uk', 'premier-league'),
         'LaLiga': ('es', 'la-liga'),
@@ -242,9 +248,9 @@ class Cap:
         return f'https://www.capology.com{link}'
 
     def process_club_table(self, club_html):
-        soup = BeautifulSoup(club_html, 'lxml').find('div', attrs={'class': 'team-row'})
+        soup = BeautifulSoup(club_html, 'lxml')
         clubs = soup.find_all('a')
-        return [ClubData(c.text, self.club_id(c), 'League N/A', self.club_url(c), self.name) for c in clubs]
+        return [ClubData(c.text.replace('"', '').strip(), self.club_id(c), 'League N/A', self.club_url(c), self.name) for c in clubs]
 
     def player_id(self, player):
         return self.player_id_pat.search(player.get('href')).group(1)
@@ -253,11 +259,15 @@ class Cap:
         link = player.get('href')
         return f'https://www.capology.com{link}'
 
-    def process_player_table(self, player_html, team_name):
+    def player_tds(self, tr):
+        tds = tr.find_all('td')
+        return tds[0].a, tds[-1] # first tuple item is player a tag, second is the player team name
+
+    def process_player_table(self, player_html):
         soup = BeautifulSoup(player_html, 'lxml')
         trs = soup.find_all('tr')
-        players = map(lambda x: x.find_all('td')[0].a, trs)
-        return [PlayerData(p.text, self.player_id(p), team_name, self.player_url(p), self.name) for p in players]  
+        players = map(self.player_tds, trs)
+        return [PlayerData(p[0].text, self.player_id(p[0]), p[1].text, self.player_url(p[0]), self.name) for p in players]
 
 """
 Fotmob, whoscored require extracting cookie headers through browser automation before making http requests
@@ -346,9 +356,9 @@ class FotMob:
         clubs = map(lambda x: x.find_all('td')[1].a, trs)
         return [ClubData(self.club_name(c), self.club_id(c), 'League N/A', self.club_url(c), self.name) for c in clubs]
 
-    def club_api_url(self, club: ClubData): # 4 digit id next to data updates every matchweek
+    def club_api_url(self, club: ClubData): # 4 digit id next to data updates every matchweek !!!
         slug = re.search(r'overview/(.+)$', club.url).group(1)
-        return (f'https://www.fotmob.com/_next/data/3298/teams/{club.id}'
+        return (f'https://www.fotmob.com/_next/data/3312/teams/{club.id}'
                 f'/squad/{slug}.json?id=9825&tab=overview&slug={slug}')
 
     def player_url(self, player):

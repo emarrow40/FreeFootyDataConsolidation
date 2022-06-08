@@ -16,6 +16,7 @@ class PipeBase:
             'understat',
             'whoscored',
             'soccerment',
+            'capology',
             'fotmob',   
     ]
 

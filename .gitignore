@@ -9,3 +9,6 @@ footydata-env
 
 # test csv exports
 test_CSVs
+
+# file for testing individual sites
+siteTest.py
