@@ -1,9 +1,13 @@
 import asyncio
 from playwright.async_api import async_playwright
 from aiohttp import ClientSession
+import pandas as pd
 from siteScrapers import extract_main
 from dfTransforms import transform_main
 from db import load_main
+import pathlib
+
+here = pathlib.Path(__file__).parent / 'test_CSVs'
 
 async def main() -> None:
     """Runs pipeline webscraping extraction, site categorical linkage transforms, and loads into an instance of PostgreSQL"""

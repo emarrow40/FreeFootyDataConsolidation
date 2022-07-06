@@ -1,10 +1,108 @@
-from aiohttp import ClientSession
+from aiohttp import ClientSession, ClientResponseError
 import asyncio
 import json
 from unidecode import unidecode
 from bs4 import BeautifulSoup
 from thefuzz import fuzz, process
 import pandas as pd
+import time
+
+class ClubMatchesBySite:
+    """Facilitates inter-site name matching to appropriately link naming discrepancies for clubs"""
+    def __init__(self, clubs_by_site):
+        self.clubs_by_site = clubs_by_site
+        self.site_names = ['transfermrkt', 'fotmob', 'fbref', 'understat', 'whoscored', 'soccerment', 'capology']
+        self.sofa_names = self.clubs_by_site[1]
+        self.sites_to_match = {site_name: clubs for site_name, clubs in zip(self.site_names, self.clubs_by_site_filter())}
+        self.match_rows = [self.match_row_template(sofa_name) for sofa_name in self.sofa_names]
+        self.full_matches = []
+
+    def clubs_by_site_filter(self):
+        sites_enum = enumerate(self.clubs_by_site)
+        return [site for i, site in sites_enum if i != 1]
+
+    def match_row_template(self, sofa_name: str):
+        """Creates dict to store match resutls and account for sites that still don't have a match"""
+        match_row = {site_name: None for site_name in self.site_names}
+        match_row['sofascore'] = sofa_name
+        return match_row
+
+    def sites_remaining(self, match_row: dict) -> dict:
+        """After a given match stage, determines the sites for a given team that still don't have a match"""
+        return {key: self.sites_to_match[key] for key, val in match_row.items() if val is None}
+
+    def remaining_match_rows(self) -> None:
+        """After a given match stage, determines the clubs that still have sites remaining"""
+        self.match_rows = list(filter(lambda match_row: match_row not in self.full_matches, self.match_rows))
+
+    def store_full_matches(self) -> None:
+        """After a given match stage, stores match rows where a match was found for each site"""
+        for match_row in self.match_rows:
+            if len(self.sites_remaining(match_row).keys()) == 0:
+                self.full_matches.append(match_row)
+
+    def same_name(self, match_row: dict) -> dict:
+        """Stores matches that have the same name"""
+        name_to_match = match_row['sofascore']
+        for site_name, clubs in self.sites_to_match.items():
+            if name_to_match in clubs:
+                self.sites_to_match[site_name] = clubs[clubs != name_to_match]
+                match_row[site_name] = name_to_match
+        return match_row
+
+    def fuzzy_match(self, match_row: dict) -> dict:
+        """Stores matches that have the highest fuzzy match ratio"""
+        name_to_match = match_row['sofascore']
+        for site_name, clubs in self.sites_remaining(match_row).items():
+            match = process.extractOne(name_to_match, clubs, score_cutoff=85)
+            if match:
+                self.sites_to_match[site_name] = clubs[clubs != match[0]]
+                match_row[site_name] = match[0]
+        return match_row
+
+    def partial_match(self, match_row: dict) -> dict:
+        """Stores matches by partial ratio"""
+        name_to_match = match_row['sofascore']
+        for site_name, clubs in self.sites_remaining(match_row).items():
+            match = process.extractOne(name_to_match, clubs, scorer=fuzz.partial_ratio, score_cutoff=80)
+            if match:
+                self.sites_to_match[site_name] = clubs[clubs != match[0]]
+                match_row[site_name] = match[0]
+        return match_row       
+
+    def second_fuzzy_match(self, match_row: dict) -> dict:
+        """Stores matches that have the highest fuzzy match ratio no score cutoff"""
+        name_to_match = match_row['sofascore']
+        for site_name, clubs in self.sites_remaining(match_row).items():
+            match = process.extractOne(name_to_match, clubs)
+            if match:
+                self.sites_to_match[site_name] = clubs[clubs != match[0]]
+                match_row[site_name] = match[0]
+        return match_row
+
+    def match_stage_sync(self, func) -> None:
+        """Runs a synchronous match stage and the match stage helpers"""
+        current_match_rows = self.match_rows
+        self.match_rows = [func(match_row) for match_row in current_match_rows]
+        self.store_full_matches()
+        self.remaining_match_rows()
+
+    def apply_match_stages_sync(self, match_funcs) -> None:
+        """Applies synchronous match stages to match rows"""
+        for match_function in match_funcs:
+            if self.match_rows:
+                self.match_stage_sync(match_function)
+    
+    def main(self) -> pd.DataFrame:
+        """Designates sync and async match stages and runs them to produce a match DataFrame"""
+        sync_match_funcs = [
+            self.same_name, 
+            self.fuzzy_match,
+            self.partial_match,
+            self.second_fuzzy_match,
+        ]
+        self.apply_match_stages_sync(sync_match_funcs)
+        return pd.DataFrame(self.full_matches)
 
 class PlayerMatchesBySite:
     """Facilitates inter-site name matching to appropriately link naming discrepancies for players on a given team"""
@@ -69,27 +167,35 @@ class PlayerMatchesBySite:
 
     async def wiki_search(self, match_row: dict) -> str:
         """Makes GET request to wiki API to extract key for the player page"""
-        name_team = match_row['fotmob'] + ' ' + self.team_name
-        search_url = f'https://en.wikipedia.org/w/rest.php/v1/search/page?q={name_team}&limit=1'
-        r_search = await self.session.get(search_url)
-        r_search.raise_for_status()
-        search_json = json.loads(await r_search.read())
-        if search_json['pages']:
-            return search_json['pages'][0]['key']
+        try:
+            name_team = match_row['fotmob'] + ' ' + self.team_name
+            search_url = f'https://en.wikipedia.org/w/rest.php/v1/search/page?q={name_team}&limit=1'
+            r_search = await self.session.get(search_url)
+            r_search.raise_for_status()
+            search_json = json.loads(await r_search.read())
+            if search_json['pages']:
+                return search_json['pages'][0]['key']
+        except ClientResponseError:
+            time.sleep(5)
+            return await self.wiki_search(match_row)
 
     async def wiki_names(self, match_row: dict) -> list:
         """Using player page key, makes GET request to wiki API to extract alternative names"""
-        page_key = await self.wiki_search(match_row)
-        if page_key:
-            parse_url = f'https://en.wikipedia.org/api/rest_v1/page/summary/{page_key}'
-            r_parse = await self.session.get(parse_url)
-            r_parse.raise_for_status()
-            parse_json = json.loads(await r_parse.read())
-            parse_html = parse_json['extract_html']
-            soup = BeautifulSoup(parse_html, 'lxml')
-            alt_names = [bold_name.text for bold_name in soup.find_all('b')]
-            alt_names_processed = [unidecode(alt_name.lower()) for alt_name in alt_names]
-            return [alt_name for alt_name in alt_names_processed if fuzz.partial_ratio(alt_name, match_row['fotmob']) != 100]
+        try:
+            page_key = await self.wiki_search(match_row)
+            if page_key:
+                parse_url = f'https://en.wikipedia.org/api/rest_v1/page/summary/{page_key}'
+                r_parse = await self.session.get(parse_url)
+                r_parse.raise_for_status()
+                parse_json = json.loads(await r_parse.read())
+                parse_html = parse_json['extract_html']
+                soup = BeautifulSoup(parse_html, 'lxml')
+                alt_names = [bold_name.text for bold_name in soup.find_all('b')]
+                alt_names_processed = [unidecode(alt_name.lower()) for alt_name in alt_names]
+                return [alt_name for alt_name in alt_names_processed if fuzz.partial_ratio(alt_name, match_row['fotmob']) != 100]
+        except ClientResponseError:
+            time.sleep(5)
+            return await self.wiki_names(match_row)
 
     async def wiki_name_match(self, match_row: dict) -> dict:
         """Stores matches that have the highest fuzzy match ratio w/ wiki alternative names"""

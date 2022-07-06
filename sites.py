@@ -3,10 +3,9 @@ import re
 from idObjects import ClubData, PlayerData
 from siteHeaders import set_headers
 from itertools import chain
-import urllib.parse
 
 """
-Sofascore and Transfermrkt data can be accessed directly through http requests
+Sofascore and Fotmob data can be accessed directly through http requests
 """
 
 class Sofa:
@@ -45,45 +44,109 @@ class Sofa:
         slug = player['slug']
         return f'https://www.sofascore.com/player/{slug}/{id}'
 
-    def process_player_json(self, player_json, team_name):
+    def process_player_json(self, player_json, club: ClubData):
         table = player_json['players']
         players = map(lambda x: x['player'], table)
-        return [PlayerData(p['name'], p['id'], team_name, self.player_url(p), self.name) for p in players]
+        return [PlayerData(p['name'], p['id'], club.name, self.player_url(p), self.name) for p in players]
 
-class Tm:
-    name = 'transfermarkt'
-    leagues = {
-        'Premier League': 'GB1',
-        'LaLiga': 'ES1',
-        'Ligue 1': 'FR1',
-        'Serie A': 'IT1',
-        'Bundesliga': 'L1',      
+class FotMob:
+    name = 'fotmob'
+    leagues = { # using teams that have stayed in the top division to provide season modularity, current codes reflect 21/22
+        'Premier League': (9825, 47, 16390),
+        'Bundesliga': (9823, 54, 16494),
+        'LaLiga': (8633, 87, 16520),
+        'Ligue 1': (9847, 53, 16499),
+        'Serie A': (8564, 55, 16621),
     }
     headers = set_headers()
 
     def get_league_url(self, league):
-        return f'https://www.transfermarkt.us/quickselect/teams/{league}'
+        return f'https://www.fotmob.com/api/historicaltable?teamId={league[0]}&tableLink=historic/{league[1]}/season/{league[2]}/table.fot'
 
-    def club_url(self, club):
-        link = club['link']
-        return f'https://www.transfermarkt.us{link}'
+    def club_url(self, link):
+        return f'https://www.fotmob.com{link}'
 
     def process_club_json(self, club_json):
-        return [ClubData(c['name'], c['id'], 'League N/A', self.club_url(c), self.name) for c in club_json]
+        clubs = club_json['table']['all']
+        return [ClubData(c['name'], c['id'], 'League N/A', self.club_url(c['pageUrl']), self.name) for c in clubs]
 
-    def club_api_url(self, club: ClubData):
-        return f'https://www.transfermarkt.us/quickselect/players/{club.id}'
+    def club_api_url(self, club: ClubData): # 4 digit id next to data updates every matchweek !!!
+        slug = re.search(r'overview/(.+)$', club.url).group(1)
+        return (f'https://www.fotmob.com/_next/data/3353/teams/{club.id}'
+                f'/squad/{slug}.json?id={club.id}&tab=overview&slug={slug}')
 
     def player_url(self, player):
-        link = player['link']
+        slug = player['name'].replace(' ', '-')
+        id = player['id']
+        return f'https://www.fotmob.com/players/{id}/{slug}'
+
+    def process_player_json(self, player_json, club: ClubData):
+        team_data = player_json['pageProps']['initialState']['team'][str(club.id)]['data']
+        team_name = team_data['details']['name']
+        squad = team_data['squad']
+        squad_by_position = [position[1] for position in squad[1:]]
+        players = chain(*squad_by_position)
+        return [PlayerData(p['name'], p['id'], team_name, self.player_url(p), self.name) for p in players]
+
+"""
+Tranfermarkt and Soccerment can be scraped fully without browser automation with http requests but from html responses instead of json
+"""
+
+class Tm:
+    name = 'transfermarkt'
+    leagues = {
+        'Premier League': ('premier-league', 'GB1'),
+        'LaLiga': ('la-liga', 'ES1'),
+        'Ligue 1': ('ligue-1', 'FR1'),
+        'Serie A': ('serie-a', 'IT1'),
+        'Bundesliga': ('bundesliga', 'L1'),      
+    }
+    club_strainer = SoupStrainer('table', attrs={'class': 'items'})
+    club_id_pat = re.compile(r'/verein/(\d+)/saison')
+    player_id_pat = re.compile(r'/(\d+)$')
+    headers = set_headers()
+
+    def get_league_url(self, league):
+        return f'https://www.transfermarkt.us/{league[0]}/tabelle/wettbewerb/{league[1]}/saison_id/2021'
+
+    def club_url(self, club):
+        link = club.get('href')
         return f'https://www.transfermarkt.us{link}'
 
-    def process_player_json(self, player_json, team_name):
-        return [PlayerData(p['name'], p['id'], team_name, self.player_url(p), self.name) for p in player_json]
+    def club_id(self, club):
+        return self.club_id_pat.search(club.get('href')).group(1)
 
-"""
-Soccerment can be scraped fully without browser automation with http requests but from html responses instead of json
-"""
+    def process_club_html(self, club_html):
+        soup = BeautifulSoup(club_html, 'lxml', parse_only=self.club_strainer).tbody
+        trs = soup.find_all('tr')
+        clubs = map(lambda x: x.find_all('td')[2].a, trs)
+        return [ClubData(c.get('title'), self.club_id(c), 'League N/A', self.club_url(c), self.name) for c in clubs]
+
+    def club_api_url(self, club: ClubData):
+        return club.url.replace('spielplan', 'kader')
+
+    def player_url(self, player):
+        link = player.get('href')
+        return f'https://www.transfermarkt.us{link}'
+
+    def player_id(self, player):
+        link = player.get('href')
+        return self.player_id_pat.search(link).group(1)
+
+    def transfer_check(self, player_tr):
+        player_td = player_tr.find_all('td')[1]
+        span_check = player_td.span
+        if span_check:
+            player = player_td.table.a
+            print(player)
+            return player
+        else:
+            return player_td.a
+
+    def process_player_html(self, player_html, club: ClubData):
+        trs = BeautifulSoup(player_html, 'lxml', parse_only=self.club_strainer).tbody.find_all('tr', attrs={'class': ['odd', 'even']})
+        players = map(lambda x: self.transfer_check(x), trs)
+        return [PlayerData(p.text.strip(), self.player_id(p), club.name, self.player_url(p), self.name) for p in players]
 
 class Soccerment:
     name = 'soccerment'
@@ -96,7 +159,7 @@ class Soccerment:
     }
     club_strainer = SoupStrainer('tbody', attrs={'id': 'table_container'})
     player_strainer = SoupStrainer('div', attrs={'id': 'teams_tabs_content'})
-    player_teamname = SoupStrainer('h1', {'class': 'team_name'})
+    player_teamname = SoupStrainer('h1', attrs={'class': 'team_name'})
     player_id_pat = re.compile(r'player/(\d+)/')
     headers = set_headers()
 
@@ -113,6 +176,9 @@ class Soccerment:
         clubs = map(lambda x: x.find_all('td')[1].a, trs)
         return [ClubData(c.text.replace('"', '').strip(), 'Club ID N/A', 'League N/A', self.club_url(c), self.name) for c in clubs]
 
+    def club_api_url(self, club: ClubData):
+        return club.url
+
     def player_url(self, player):
         link = player.get('href')
         return f'https://analytics.soccerment.com{link}'
@@ -121,12 +187,12 @@ class Soccerment:
         link = player.get('href')
         return self.player_id_pat.search(link).group(1)
 
-    def process_player_html(self, player_html):
-        team_name = BeautifulSoup(player_html, 'lxml', parse_only=self.player_teamname).text
+    def process_player_html(self, player_html, club: ClubData):
+        #team_name = BeautifulSoup(player_html, 'lxml', parse_only=self.player_teamname).find('h1').text
         player_cards = BeautifulSoup(player_html, 'lxml', parse_only=self.player_strainer).find_all('div', attrs={'class': 'card_info'})
         end_index = len(player_cards) // 2 # html response returns duplicate set of cards -- only need first set
         players = map(lambda x: x.a, player_cards[:end_index])
-        return [PlayerData(p.text, self.player_id(p), team_name, self.player_url(p), self.name) for p in players]
+        return [PlayerData(p.text, self.player_id(p), club.name, self.player_url(p), self.name) for p in players]
 
 """
 Fbref and understat require full browser automation, content loaded dynamically and requests don't appear in dev tools
@@ -270,7 +336,7 @@ class Cap:
         return [PlayerData(p[0].text, self.player_id(p[0]), p[1].text, self.player_url(p[0]), self.name) for p in players]
 
 """
-Fotmob, whoscored require extracting cookie headers through browser automation before making http requests
+whoscored requires extracting cookie headers through browser automation before making http requests
 """
 
 class Who:
@@ -319,57 +385,4 @@ class Who:
 
     def process_player_json(self, player_json, club: ClubData):
         players = player_json['playerTableStats']
-        return [PlayerData(p['name'], p['playerId'], p['teamName'], self.player_url(p), self.name) for p in players]
-
-class FotMob:
-    name = 'fotmob'
-    club_table = '#__next > main > section > section > div > section > section > div > div > section > div > article > div.css-c0041o-TableContainer.ecspc023 > table > tbody'
-    club_id_pat = re.compile(r'/teams/(\d+)/')
-    club_name_pat = re.compile(r'overview/(.+)$')
-    cookie_filter = ['_ga', 'u:location']
-    cookie_keyword = '_hj'
-    leagues = {
-        'Premier League': (47, 'premier-league'),
-        'Bundesliga': (54, '1.-bundesliga'),
-        'LaLiga': (87, 'laliga'),
-        'Ligue 1': (53, 'ligue-1'),
-        'Serie A': (55, 'serie-a'),
-    }
-
-    def get_league_url(self, league):
-        return f'https://www.fotmob.com/leagues/{league[0]}/overview/{league[1]}'
-
-    def club_id(self, club):
-        return self.club_id_pat.search(club.get('href')).group(1)
-
-    def club_name(self, club): # name that appears in table does not match name in player json response -- lower and remove special characters to create uniformity
-        name = self.club_name_pat.search(club.get('href')).group(1)
-        return urllib.parse.unquote(name.replace('-', ''))
-
-    def club_url(self, club):
-        link = club.get('href')
-        return f'https://www.fotmob.com{link}'
-
-    def process_club_table(self, club_html, league):
-        soup = BeautifulSoup(club_html, 'lxml')
-        trs = soup.find_all('tr')
-        clubs = map(lambda x: x.find_all('td')[1].a, trs)
-        return [ClubData(self.club_name(c), self.club_id(c), 'League N/A', self.club_url(c), self.name) for c in clubs]
-
-    def club_api_url(self, club: ClubData): # 4 digit id next to data updates every matchweek !!!
-        slug = re.search(r'overview/(.+)$', club.url).group(1)
-        return (f'https://www.fotmob.com/_next/data/3312/teams/{club.id}'
-                f'/squad/{slug}.json?id=9825&tab=overview&slug={slug}')
-
-    def player_url(self, player):
-        slug = player['name'].replace(' ', '-')
-        id = player['id']
-        return f'https://www.fotmob.com/players/{id}/{slug}'
-
-    def process_player_json(self, player_json, club: ClubData):
-        team_data = player_json['pageProps']['initialState']['team'][club.id]['data']
-        team_name = re.sub(r'[\'\-\s]', '', team_data['details']['name'].lower())
-        squad = team_data['squad']
-        squad_by_position = [position[1] for position in squad[1:]]
-        players = chain(*squad_by_position)
-        return [PlayerData(p['name'], p['id'], team_name, self.player_url(p), self.name) for p in players]
+        return [PlayerData(p['name'], p['playerId'], club.name, self.player_url(p), self.name) for p in players]

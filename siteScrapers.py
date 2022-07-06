@@ -50,9 +50,9 @@ class PlaywrightOnly:
 class PlaywrightOnlyCap:
     """Facilitates scraping of capology where content is dynamically loaded
     
-    Applicable to just capology as its content loads much slower than the other website
+    Applicable to just capology as its content loads much slower than the other websites
     yet the way the data is structured has a workaround where all teams and players within a league
-    are available within a single page
+    are available on a single page
     """
     def __init__(self, site: Cap, browser: Browser) -> None:
         self.site = site
@@ -99,8 +99,9 @@ class AiohttpOnlyJson:
     Applicable to:
     sofascore
     transfermrkt
+    fotmob
     """
-    def __init__(self, site: Union[Sofa, Tm], session: ClientSession) -> None:
+    def __init__(self, site: Union[Sofa, FotMob], session: ClientSession) -> None:
         self.site = site
         self.session = session
 
@@ -118,7 +119,7 @@ class AiohttpOnlyJson:
         async with self.session.get(club_api_url, headers=self.site.headers) as r:
             r.raise_for_status()
             player_json = json.loads(await r.read())
-            return self.site.process_player_json(player_json, club.name)
+            return self.site.process_player_json(player_json, club)
 
     def idObjects_to_df(self, idObjects: Union[list[ClubData], list[PlayerData]]) -> pd.DataFrame:
         return pd.DataFrame(map(lambda x: x.__dict__, idObjects))
@@ -139,22 +140,25 @@ class AiohttpOnlyHtml:
     Applicable to:
     soccerment
     """
-    def __init__(self, site: Soccerment, session: ClientSession) -> None:
+    def __init__(self, site: Union[Soccerment, Tm], session: ClientSession) -> None:
         self.site = site
         self.session = session
 
     async def get_club_html(self, league) -> list[ClubData]:
         league_url = self.site.get_league_url(league)
+        print(league_url)
         async with self.session.get(league_url, headers=self.site.headers) as r:
             r.raise_for_status()
             club_html = await r.text()
             return self.site.process_club_html(club_html)
 
     async def get_player_html(self, club: ClubData) -> list[PlayerData]:
-        async with self.session.get(club.url, headers=self.site.headers) as r:
+        club_api_url = self.site.club_api_url(club)
+        print(club_api_url)
+        async with self.session.get(club_api_url, headers=self.site.headers) as r:
             r.raise_for_status()
             player_html = await r.text()
-            return self.site.process_player_html(player_html)
+            return self.site.process_player_html(player_html, club)
 
     def idObjects_to_df(self, idObjects: Union[list[ClubData], list[PlayerData]]) -> pd.DataFrame:
         return pd.DataFrame(map(lambda x: x.__dict__, idObjects))
@@ -174,9 +178,8 @@ class PlaywrightAiohttp:
 
     Applicable to:
     whoscored
-    fotmob
     """
-    def __init__(self, site: Union[Who, FotMob], session: ClientSession, browser: Browser):
+    def __init__(self, site: Who, session: ClientSession, browser: Browser):
         self.site = site
         self.session = session
         self.browser = browser
@@ -228,13 +231,13 @@ async def extract_main(browser: Browser, session: ClientSession) -> tuple[pd.Dat
     """Extracts player and team data from each site and stores them in comprehensive dataframes"""
     site_tasks = [
         AiohttpOnlyJson(Sofa(), session).main(),
-        AiohttpOnlyJson(Tm(), session).main(),
+        AiohttpOnlyJson(FotMob(), session).main(),
+        AiohttpOnlyHtml(Tm(), session).main(),
         AiohttpOnlyHtml(Soccerment(), session).main(),
         PlaywrightOnly(Under(), browser).main(),
         PlaywrightOnly(Fbref(), browser).main(),
         PlaywrightOnlyCap(Cap(), browser).main(),
         PlaywrightAiohttp(Who(), session, browser).main(),
-        PlaywrightAiohttp(FotMob(), session, browser).main(),
     ]
     df_tuples = await asyncio.gather(*site_tasks)
     all_clubs_df = pd.concat((df_tuple[0] for df_tuple in df_tuples))
